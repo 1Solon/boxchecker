@@ -1,9 +1,10 @@
+import type { ChatEndpointConfig } from "./llm.ts";
 import type { EndpointConfig } from "./transcription.ts";
 
 export type Config = {
   transcription: EndpointConfig;
-  screening: EndpointConfig;
-  verification: EndpointConfig;
+  screening: ChatEndpointConfig;
+  verification: ChatEndpointConfig;
   firecrawlUrl: string;
 };
 
@@ -22,11 +23,16 @@ function endpoint(stage: string): EndpointConfig {
   };
 }
 
+function chatEndpoint(stage: string): ChatEndpointConfig {
+  const extraBody = process.env[`BOXCHECKER_${stage}_EXTRA_BODY`];
+  return { ...endpoint(stage), extraBody: extraBody ? JSON.parse(extraBody) : undefined };
+}
+
 export function loadConfig(): Config {
   return {
     transcription: endpoint("TRANSCRIPTION"),
-    screening: endpoint("SCREENING"),
-    verification: endpoint("VERIFICATION"),
+    screening: chatEndpoint("SCREENING"),
+    verification: chatEndpoint("VERIFICATION"),
     firecrawlUrl: required("BOXCHECKER_FIRECRAWL_URL").replace(/\/$/, ""),
   };
 }

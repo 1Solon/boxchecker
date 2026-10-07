@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { parseArgs } from "node:util";
+import { parse as parseYaml } from "yaml";
 import { countChannels, extractChannel } from "./audio.ts";
 import { loadConfig, type Config } from "./config.ts";
 import type { Transcript } from "./domain.ts";
@@ -9,6 +10,7 @@ import { openAiCompatibleModel } from "./llm.ts";
 import { replay, type ReplayEvent } from "./replay.ts";
 import { renderReport } from "./report.ts";
 import { modelScreener } from "./screening.ts";
+import { AnswerKey, modelMatcher, renderScore, score } from "./scoring.ts";
 import { firecrawlSearch } from "./search.ts";
 import { formatTime } from "./time.ts";
 import { transcribeConversation } from "./transcript.ts";
@@ -17,7 +19,8 @@ import { pipelineVerifier } from "./verification.ts";
 
 const USAGE = `Usage:
   boxchecker transcribe <audio> [--out transcript.json]
-  boxchecker replay <audio | transcript.json> [--out runs/<name>] [--transcription-delay 2]`;
+  boxchecker replay <audio | transcript.json> [--key answers.yaml] [--out runs/<name>] [--transcription-delay 2]
+  boxchecker score <run-dir> <answers.yaml>`;
 
 async function transcribeFile(audio: string, config: Config, workDir: string): Promise<Transcript> {
   return transcribeConversation(audio, {
@@ -60,7 +63,11 @@ async function replayCommand(args: string[]) {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
-    options: { out: { type: "string" }, "transcription-delay": { type: "string", default: "2" } },
+    options: {
+      out: { type: "string" },
+      key: { type: "string" },
+      "transcription-delay": { type: "string", default: "2" },
+    },
   });
   const [input] = positionals;
   if (!input) throw new Error(USAGE);
@@ -97,10 +104,29 @@ async function replayCommand(args: string[]) {
   await writeFile(join(runDir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
   await writeFile(join(runDir, "report.md"), renderReport(events, { title: `BoxChecker replay: ${name}`, transcriptionDelay }));
   console.error(`Wrote ${runDir}/report.md`);
+  if (values.key) await scoreRun(runDir, values.key, config);
+}
+
+async function scoreRun(runDir: string, keyFile: string, config: Config) {
+  const events: ReplayEvent[] = (await readFile(join(runDir, "events.jsonl"), "utf8"))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const key = AnswerKey.parse(parseYaml(await readFile(keyFile, "utf8")));
+  const result = await score(events, key, modelMatcher(openAiCompatibleModel(config.screening)));
+  const markdown = renderScore(result);
+  await writeFile(join(runDir, "score.md"), markdown);
+  console.log(markdown);
+}
+
+async function scoreCommand(args: string[]) {
+  const [runDir, keyFile] = args;
+  if (!runDir || !keyFile) throw new Error(USAGE);
+  await scoreRun(runDir, keyFile, loadConfig());
 }
 
 const [command, ...rest] = process.argv.slice(2);
-const commands: Record<string, (args: string[]) => Promise<void>> = { transcribe, replay: replayCommand };
+const commands: Record<string, (args: string[]) => Promise<void>> = { transcribe, replay: replayCommand, score: scoreCommand };
 const handler = command ? commands[command] : undefined;
 if (!handler) {
   console.error(USAGE);

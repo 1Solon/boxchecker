@@ -32,6 +32,9 @@ pnpm boxchecker replay call.transcript.json
 
 # Score a run against the recording's Planted Claims
 pnpm boxchecker score runs/<run> call.answers.yaml
+
+# Web app: drag a recording in and watch it get fact-checked (listens on the LAN by default)
+pnpm boxchecker serve --port 8790
 ```
 
 An answer key lists each Planted Claim, roughly when it is said, and the expected outcome:

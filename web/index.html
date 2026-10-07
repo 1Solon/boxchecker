@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BoxChecker</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside>
+      <a class="brand" href="#"><span class="logo">B</span> BoxChecker</a>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.ogg,.opus,.webm,.flac,.aac" hidden />
+        <strong>Drop a recording</strong>
+        <span>or click to choose</span>
+        <small>Stereo: one Speaker per channel</small>
+      </label>
+      <div id="upload" class="upload" hidden></div>
+      <h2>Runs</h2>
+      <ul id="runs" class="runs"></ul>
+    </aside>
+
+    <main id="main">
+      <section id="empty" class="empty">
+        <div class="empty-drop">
+          <span class="logo big">B</span>
+          <h1>Drop a recording anywhere</h1>
+          <p>BoxChecker replays it as if live: it transcribes the conversation, finds checkable Claims as each Utterance ends, verifies them against the web, and decides when it would have interjected.</p>
+        </div>
+      </section>
+
+      <section id="run" hidden>
+        <header class="run-header">
+          <div>
+            <h1 id="run-name"></h1>
+            <p id="run-status" class="status"></p>
+          </div>
+          <a id="run-report" class="button" download>Download report</a>
+        </header>
+        <div id="player" class="player" hidden>
+          <audio id="audio" controls preload="metadata"></audio>
+          <label class="follow"><input type="checkbox" id="follow" checked /> Follow transcript</label>
+        </div>
+        <div id="stats" class="stats"></div>
+        <div id="interjections"></div>
+        <div class="columns">
+          <section>
+            <h2>Claims</h2>
+            <div id="claims" class="claims"></div>
+          </section>
+          <section>
+            <h2>Transcript</h2>
+            <div id="transcript" class="transcript"></div>
+          </section>
+        </div>
+        <div id="errors"></div>
+      </section>
+    </main>
+
+    <div id="dropping" class="dropping" hidden>Drop to fact-check</div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

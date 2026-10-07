@@ -189,8 +189,15 @@ export function createApp({
     }
     for (const message of run.messages) send(message);
     if (run.status === "done" || run.status === "failed") return res.end();
-    run.listeners.add(send);
-    req.on("close", () => run.listeners.delete(send));
+    const listener = (message: RunMessage) => {
+      send(message);
+      if (message.kind === "status" && (message.status === "done" || message.status === "failed")) {
+        run.listeners.delete(listener);
+        res.end();
+      }
+    };
+    run.listeners.add(listener);
+    req.on("close", () => run.listeners.delete(listener));
   }
 
   async function serveAudio(req: IncomingMessage, res: ServerResponse, id: string) {

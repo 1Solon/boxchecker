@@ -21,6 +21,7 @@ const REASONS = {
 
 const STATUS = {
   queued: "Queued",
+  downloading: "Downloading…",
   transcribing: "Transcribing…",
   replaying: "Fact-checking…",
   done: "Done",
@@ -31,7 +32,7 @@ let current = null; // { id, source, state }
 
 function emptyState() {
   return {
-    status: "queued",
+    status: null, // until the first message arrives
     detail: "",
     utterances: new Map(),
     claims: new Map(),
@@ -40,11 +41,23 @@ function emptyState() {
     interjections: new Map(),
     repeats: [],
     errors: [],
+    progress: null, // latest { fraction, detail, stageStartedAt } within the current status
+    stageSeenAt: Date.now(),
+    failedStage: null,
   };
 }
 
 function apply(state, message) {
+  if (message.kind === "progress") {
+    state.progress = message;
+    return;
+  }
   if (message.kind === "status") {
+    if (message.status !== state.status) {
+      if (message.status === "failed") state.failedStage = state.status;
+      state.stageSeenAt = Date.now();
+      state.progress = null;
+    }
     state.status = message.status;
     state.detail = message.detail ?? "";
     return;
@@ -100,14 +113,11 @@ function render() {
 
   const status = $("run-status");
   const heard = s.utterances.size;
-  status.textContent =
-    s.status === "replaying"
-      ? `Fact-checking… ${heard} Utterances heard, ${s.claims.size} Claims found`
-      : s.status === "failed"
-        ? `Failed: ${s.detail}`
-        : STATUS[s.status] + (s.status === "queued" && s.detail ? ` — ${s.detail}` : "");
+  status.textContent = s.status === "failed" ? `Failed: ${s.detail}` : (STATUS[s.status] ?? "Loading…");
   status.className = `status ${working ? "working" : s.status}`;
+  renderProgress();
   $("run-report").hidden = s.status !== "done";
+  $("run-delete").hidden = working;
 
   // Stats
   const claims = [...s.claims.values()].sort((a, b) => saidAt(s, a.claim) - saidAt(s, b.claim));
@@ -208,6 +218,70 @@ function render() {
   highlightPlaying();
 }
 
+/* ---------- progress ---------- */
+
+const formatDuration = (seconds) => {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+};
+
+function renderProgress() {
+  if (!current) return;
+  const s = current.state;
+  const working = !["done", "failed"].includes(s.status);
+  const panel = $("progress");
+  panel.hidden = s.status === "done" || s.status === null;
+  if (panel.hidden) return;
+
+  // Steps: the run's path through the pipeline, with where it is (or where it failed).
+  const steps = [
+    ["queued", "Queued"],
+    ...(current.fromLink ? [["downloading", "Download"]] : []),
+    ["transcribing", "Transcribe"],
+    ["replaying", "Fact-check"],
+    ["done", "Done"],
+  ];
+  const at = steps.findIndex(([key]) => key === (s.status === "failed" ? s.failedStage : s.status));
+  $("steps").innerHTML = steps
+    .map(([key, label], i) => {
+      const state = i < at ? "complete" : i === at ? (s.status === "failed" ? "failed" : "current") : "";
+      return `<li class="${state}" data-step="${key}">${label}</li>`;
+    })
+    .join("");
+
+  // Bar: real progress when the stage reports it, otherwise an indeterminate stripe.
+  const fraction = s.progress?.fraction;
+  const fill = $("bar-fill");
+  const known = typeof fraction === "number";
+  fill.className = `bar-fill ${s.status === "failed" ? "failed" : working && !known ? "indeterminate" : ""}`;
+  fill.style.width = s.status === "failed" ? "100%" : known ? `${(fraction * 100).toFixed(1)}%` : "";
+  panel.classList.toggle("failed", s.status === "failed");
+
+  const label = STATUS[s.status] ?? s.status;
+  $("progress-detail").textContent =
+    s.status === "failed"
+      ? s.detail || "This run did not finish."
+      : [label, known ? `${Math.floor(fraction * 100)}%` : "", s.progress?.detail || s.detail].filter(Boolean).join(" · ");
+
+  // Time: how long this stage has run, and a rough ETA once there is enough progress to go on.
+  let time = "";
+  if (working) {
+    const elapsed = (Date.now() - (s.progress?.stageStartedAt ?? s.stageSeenAt)) / 1000;
+    time = `${formatDuration(elapsed)} elapsed`;
+    if (known && fraction > 0.02 && fraction < 1 && elapsed > 3) time += ` · about ${formatDuration((elapsed * (1 - fraction)) / fraction)} left`;
+  }
+  $("progress-time").textContent = time;
+
+  // Mirror it in the sidebar entry so the run's state is visible from the list.
+  const meta = document.querySelector(`[data-run="${CSS.escape(current.id)}"] .meta`);
+  if (meta && working) meta.textContent = `${label}${known ? ` ${Math.floor(fraction * 100)}%` : ""}`;
+}
+
+// Keep elapsed time and ETA ticking between server updates.
+setInterval(() => current && !["done", "failed"].includes(current.state.status) && renderProgress(), 1000);
+
 /* ---------- audio ---------- */
 
 const audio = $("audio");
@@ -261,7 +335,7 @@ async function openRun(id) {
   if (!meta) return showEmpty();
 
   const source = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
-  current = { id, source, state: emptyState() };
+  current = { id, source, state: emptyState(), fromLink: Boolean(meta.url) };
   $("empty").hidden = true;
   $("run").hidden = false;
   $("run-name").textContent = meta.name;
@@ -276,6 +350,7 @@ async function openRun(id) {
     const message = JSON.parse(msg.data);
     apply(run.state, message);
     scheduleRender();
+    if (message.kind === "status") refreshMeta(run);
     if (message.kind === "status" && ["done", "failed"].includes(message.status)) {
       source.close();
       loadRuns();
@@ -287,6 +362,17 @@ async function openRun(id) {
   render();
 }
 
+// A YouTube run only learns its title and gets a recording once the download finishes.
+async function refreshMeta(run) {
+  const meta = (await loadRuns()).find((r) => r.id === run.id);
+  if (!meta || current !== run) return;
+  $("run-name").textContent = meta.name;
+  if (meta.hasAudio && $("player").hidden) {
+    $("player").hidden = false;
+    audio.src = `/api/runs/${encodeURIComponent(run.id)}/audio`;
+  }
+}
+
 function showEmpty() {
   current?.source.close();
   current = null;
@@ -295,6 +381,24 @@ function showEmpty() {
   audio.pause();
   loadRuns();
 }
+
+$("run-delete").addEventListener("click", async () => {
+  if (!current) return;
+  const { id } = current;
+  if (!confirm(`Delete "${$("run-name").textContent}"? Its recording, Transcript, and report will be removed.`)) return;
+  // Release the recording first, or Windows will not let the server remove it.
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  const res = await fetch(`/api/runs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.error ?? `Could not delete this run (${res.status}).`);
+    return openRun(id);
+  }
+  if (current?.id === id) location.hash = "";
+  else loadRuns();
+});
 
 function route() {
   const id = new URLSearchParams(location.hash.slice(1)).get("run");
@@ -324,6 +428,44 @@ function upload(file) {
   xhr.onerror = () => (box.innerHTML = `<div class="error">Upload failed.</div>`);
   xhr.send(file);
 }
+
+async function submitLink(url) {
+  const box = $("upload");
+  box.hidden = false;
+  box.innerHTML = `<div>Adding ${escape(url)}…</div>`;
+  try {
+    const res = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status !== 201) {
+      box.innerHTML = `<div class="error">${escape(body.error ?? `Could not add link (${res.status})`)}</div>`;
+      return;
+    }
+    box.hidden = true;
+    $("link-url").value = "";
+    location.hash = `run=${encodeURIComponent(body.id)}`;
+  } catch {
+    box.innerHTML = `<div class="error">Could not add link.</div>`;
+  }
+}
+
+$("link").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitLink($("link-url").value.trim());
+});
+
+// Pasting a YouTube link anywhere outside a text field starts a run, like dropping a file.
+window.addEventListener("paste", (e) => {
+  if (e.target.closest("input, textarea")) return;
+  const text = e.clipboardData?.getData("text").trim() ?? "";
+  if (/^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//.test(text)) {
+    e.preventDefault();
+    submitLink(text);
+  }
+});
 
 $("file").addEventListener("change", (e) => {
   const [file] = e.target.files;

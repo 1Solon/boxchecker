@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTranscript } from "../src/transcript.ts";
+import { buildTranscript, transcribeConversation } from "../src/transcript.ts";
 
 const seg = (start: number, end: number, text: string) => ({ start, end, text });
 
@@ -69,5 +69,73 @@ describe("buildTranscript", () => {
     ]);
 
     expect(transcript.utterances.map((u) => u.text)).toEqual(["Hi."]);
+  });
+});
+
+describe("transcribeConversation", () => {
+  // A fake recording: each chunk "says" where it starts, so offsets are easy to check.
+  function fakeAudio(channels: number, seconds: number) {
+    const extracted: string[] = [];
+    return {
+      extracted,
+      deps: {
+        workDir: "work",
+        countChannels: async () => channels,
+        duration: async () => seconds,
+        extractChannel: async (_file: string, channel: number | "mix", out: string, range?: { start: number; length: number }) => {
+          extracted.push(`${channel}@${range?.start}+${range?.length} -> ${out}`);
+        },
+        transcriber: {
+          transcribe: async (wav: string) => {
+            const start = Number(wav.match(/-(\d+)\.wav$/)![1]);
+            return [seg(1, 2, `Said ${start + 1}s in.`)];
+          },
+        },
+      },
+    };
+  }
+
+  it("transcribes long recordings in chunks, offsetting each chunk's timestamps", async () => {
+    const audio = fakeAudio(1, 650);
+    const progress: [number, number][] = [];
+    const transcript = await transcribeConversation("call.m4a", {
+      ...audio.deps,
+      chunkSeconds: 300,
+      onProgress: (done, total) => progress.push([done, total]),
+    });
+
+    expect(audio.extracted).toEqual([
+      "mix@0+300 -> work/track-Unknown-0.wav",
+      "mix@300+300 -> work/track-Unknown-300.wav",
+      "mix@600+50 -> work/track-Unknown-600.wav",
+    ]);
+    expect(transcript.utterances.map((u) => [u.start, u.text])).toEqual([
+      [1, "Said 1s in."],
+      [301, "Said 301s in."],
+      [601, "Said 601s in."],
+    ]);
+    expect(progress).toEqual([
+      [0, 650],
+      [300, 650],
+      [600, 650],
+      [650, 650],
+    ]);
+  });
+
+  it("gives each stereo channel its own Speaker, and counts both in progress", async () => {
+    const audio = fakeAudio(2, 100);
+    const progress: number[] = [];
+    const transcript = await transcribeConversation("call.m4a", { ...audio.deps, onProgress: (done) => progress.push(done) });
+
+    expect(transcript.speakers).toEqual(["A", "B"]);
+    expect(progress).toEqual([0, 100, 200]);
+  });
+
+  it("mixes stereo into one Unknown Speaker when the channels are not separate Speakers", async () => {
+    const audio = fakeAudio(2, 100);
+    const transcript = await transcribeConversation("call.m4a", { ...audio.deps, mixChannels: true });
+
+    expect(transcript.speakers).toEqual(["Unknown"]);
+    expect(audio.extracted).toEqual(["mix@0+100 -> work/track-Unknown-0.wav"]);
   });
 });

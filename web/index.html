@@ -15,6 +15,10 @@
         <span>or click to choose</span>
         <small>Stereo: one Speaker per channel</small>
       </label>
+      <form id="link" class="link">
+        <input type="url" id="link-url" placeholder="…or paste a YouTube link" required />
+        <button class="button" type="submit">Check</button>
+      </form>
       <div id="upload" class="upload" hidden></div>
       <h2>Runs</h2>
       <ul id="runs" class="runs"></ul>
@@ -24,7 +28,7 @@
       <section id="empty" class="empty">
         <div class="empty-drop">
           <span class="logo big">B</span>
-          <h1>Drop a recording anywhere</h1>
+          <h1>Drop a recording or paste a YouTube link</h1>
           <p>BoxChecker replays it as if live: it transcribes the conversation, finds checkable Claims as each Utterance ends, verifies them against the web, and decides when it would have interjected.</p>
         </div>
       </section>
@@ -35,8 +39,19 @@
             <h1 id="run-name"></h1>
             <p id="run-status" class="status"></p>
           </div>
-          <a id="run-report" class="button" download>Download report</a>
+          <div class="actions">
+            <a id="run-report" class="button" download>Download report</a>
+            <button id="run-delete" class="button danger" type="button">Delete</button>
+          </div>
         </header>
+        <div id="progress" class="progress" hidden>
+          <ol id="steps" class="steps"></ol>
+          <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+          <div class="progress-text">
+            <span id="progress-detail"></span>
+            <span id="progress-time"></span>
+          </div>
+        </div>
         <div id="player" class="player" hidden>
           <audio id="audio" controls preload="metadata"></audio>
           <label class="follow"><input type="checkbox" id="follow" checked /> Follow transcript</label>

@@ -16,11 +16,25 @@ export async function countChannels(file: string): Promise<number> {
   return channels;
 }
 
+/** Length of `file` in seconds. */
+export async function audioDuration(file: string): Promise<number> {
+  const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]);
+  const seconds = Number.parseFloat(stdout.trim());
+  if (!Number.isFinite(seconds)) throw new Error(`Could not read the length of ${file}`);
+  return seconds;
+}
+
 /**
- * Writes one channel of `file` (or a mono mix when `channel` is "mix") as the
- * 16 kHz mono WAV that Whisper expects.
+ * Writes one channel of `file` (or a mono mix when `channel` is "mix"), optionally
+ * just `range` seconds of it, as the 16 kHz mono WAV that Whisper expects.
  */
-export async function extractChannel(file: string, channel: number | "mix", out: string): Promise<void> {
+export async function extractChannel(
+  file: string,
+  channel: number | "mix",
+  out: string,
+  range?: { start: number; length: number },
+): Promise<void> {
   const select = channel === "mix" ? ["-ac", "1"] : ["-af", `pan=mono|c0=c${channel}`];
-  await run("ffmpeg", ["-y", "-v", "error", "-i", file, ...select, "-ar", "16000", "-c:a", "pcm_s16le", out]);
+  const seek = range ? ["-ss", String(range.start), "-t", String(range.length)] : [];
+  await run("ffmpeg", ["-y", "-v", "error", ...seek, "-i", file, ...select, "-ar", "16000", "-c:a", "pcm_s16le", out]);
 }

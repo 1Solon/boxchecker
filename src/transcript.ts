@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import type { SpeakerId, Transcript, Utterance } from "./domain.ts";
 
 /** A timed piece of transcribed speech, as returned by a transcriber for one Speaker's audio. */
@@ -46,30 +47,56 @@ export function buildTranscript(
   return { speakers: tracks.map((t) => t.speaker), utterances };
 }
 
-/** Splits a Conversation recording into one track per Speaker and transcribes each. */
+/**
+ * Splits a Conversation recording into one track per Speaker and transcribes each,
+ * `chunkSeconds` at a time so long recordings report progress.
+ */
 export async function transcribeConversation(
   audioFile: string,
   deps: {
     transcriber: { transcribe(wavFile: string): Promise<Segment[]> };
     countChannels(file: string): Promise<number>;
-    extractChannel(file: string, channel: number | "mix", out: string): Promise<void>;
+    duration(file: string): Promise<number>;
+    extractChannel(file: string, channel: number | "mix", out: string, range?: { start: number; length: number }): Promise<void>;
     workDir: string;
+    /** Treat stereo as an ordinary mix (e.g. a video) rather than one Speaker per channel. */
+    mixChannels?: boolean;
+    chunkSeconds?: number;
+    /** Seconds of audio transcribed so far, across all tracks. */
+    onProgress?: (doneSeconds: number, totalSeconds: number) => void;
   },
 ): Promise<Transcript> {
+  const { chunkSeconds = 300, onProgress } = deps;
   const channels = await deps.countChannels(audioFile);
-  if (channels > 2) {
+  if (channels > 2 && !deps.mixChannels) {
     throw new Error(`${audioFile} has ${channels} channels; BoxChecker supports mono or one Speaker per stereo channel`);
   }
   const tracks: { speaker: SpeakerId; channel: number | "mix" }[] =
-    channels === 2
+    channels === 2 && !deps.mixChannels
       ? [{ speaker: "A", channel: 0 }, { speaker: "B", channel: 1 }]
       : [{ speaker: "Unknown", channel: "mix" }];
 
+  const seconds = await deps.duration(audioFile);
+  const total = seconds * tracks.length;
+  let done = 0;
+  onProgress?.(done, total);
+
   const transcribed: SpeakerSegments[] = [];
   for (const { speaker, channel } of tracks) {
-    const wav = `${deps.workDir}/track-${speaker}.wav`;
-    await deps.extractChannel(audioFile, channel, wav);
-    transcribed.push({ speaker, segments: await deps.transcriber.transcribe(wav) });
+    const segments: Segment[] = [];
+    for (let start = 0, length; start < seconds; start += length) {
+      // Fold a sliver at the end into the last chunk rather than transcribing it alone.
+      length = seconds - start - chunkSeconds < 1 ? seconds - start : chunkSeconds;
+      const wav = `${deps.workDir}/track-${speaker}-${start}.wav`;
+      await deps.extractChannel(audioFile, channel, wav, { start, length });
+      for (const s of await deps.transcriber.transcribe(wav)) {
+        segments.push({ ...s, start: s.start + start, end: s.end + start });
+      }
+      await rm(wav, { force: true });
+      done += length;
+      onProgress?.(done, total);
+    }
+    transcribed.push({ speaker, segments });
   }
   return buildTranscript(transcribed);
 }

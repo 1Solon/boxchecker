@@ -6,10 +6,10 @@ Listens to a spoken conversation and fact-checks its claims as it unfolds. See [
 
 ## Setup
 
-Requires Node 24+, pnpm, ffmpeg, a Whisper server, an OpenAI-compatible chat model, and a [Firecrawl](https://firecrawl.dev) instance.
+Requires Node 24+, pnpm, ffmpeg, [yt-dlp](https://github.com/yt-dlp/yt-dlp) (for YouTube links), a Whisper server, an OpenAI-compatible chat model, and a [Firecrawl](https://firecrawl.dev) instance.
 
 ```sh
-brew install ffmpeg whisper-cpp
+brew install ffmpeg yt-dlp whisper-cpp
 curl -L -o ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin --create-dirs \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
 whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin \
@@ -31,7 +31,7 @@ pnpm boxchecker replay call.transcript.json
 # Score a run against the recording's Planted Claims
 pnpm boxchecker score runs/<run> call.answers.yaml
 
-# Web app: drag a recording in and watch it get fact-checked (listens on the LAN by default)
+# Web app: drag a recording in (or paste a YouTube link) and watch it get fact-checked (listens on the LAN by default)
 pnpm boxchecker serve --port 8790
 ```
 
@@ -47,6 +47,6 @@ claims:
 
 ## Current limitations
 
-- **Recorded audio only.** Conversations are replayed from a file; there is no live or Discord input yet.
+- **Recorded audio only.** Conversations are replayed from a file or a YouTube video; there is no live or Discord input yet.
 - **At most two speakers**, one per stereo channel. Mono files are attributed to a single unknown speaker.
 - **English only.**

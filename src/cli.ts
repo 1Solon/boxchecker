@@ -2,34 +2,19 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { parse as parseYaml } from "yaml";
-import { countChannels, extractChannel } from "./audio.ts";
 import { loadConfig, type Config } from "./config.ts";
-import type { Transcript } from "./domain.ts";
-import { modelCorrectionCheck } from "./interjection.ts";
 import { openAiCompatibleModel } from "./llm.ts";
-import { replay, type ReplayEvent } from "./replay.ts";
-import { renderReport } from "./report.ts";
-import { modelScreener } from "./screening.ts";
+import type { ReplayEvent } from "./replay.ts";
+import { readEvents, runReplay, transcribeFile } from "./run.ts";
 import { AnswerKey, modelMatcher, renderScore, score } from "./scoring.ts";
-import { firecrawlSearch } from "./search.ts";
+import { serve } from "./server.ts";
 import { formatTime } from "./time.ts";
-import { transcribeConversation } from "./transcript.ts";
-import { openAiCompatibleTranscriber } from "./transcription.ts";
-import { pipelineVerifier } from "./verification.ts";
 
 const USAGE = `Usage:
   boxchecker transcribe <audio> [--out transcript.json]
   boxchecker replay <audio | transcript.json> [--key answers.yaml] [--out runs/<name>] [--transcription-delay 2]
-  boxchecker score <run-dir> <answers.yaml>`;
-
-async function transcribeFile(audio: string, config: Config, workDir: string): Promise<Transcript> {
-  return transcribeConversation(audio, {
-    transcriber: openAiCompatibleTranscriber(config.transcription),
-    countChannels,
-    extractChannel,
-    workDir,
-  });
-}
+  boxchecker score <run-dir> <answers.yaml>
+  boxchecker serve [--host 0.0.0.0] [--port 8790]`;
 
 async function transcribe(args: string[]) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { out: { type: "string" } } });
@@ -78,40 +63,22 @@ async function replayCommand(args: string[]) {
   const runDir = values.out ?? join("runs", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
   await mkdir(runDir, { recursive: true });
 
-  let transcript: Transcript;
-  if (extname(input) === ".json") {
-    transcript = JSON.parse(await readFile(input, "utf8"));
-  } else {
-    console.error(`Transcribing ${input}…`);
-    transcript = await transcribeFile(input, config, runDir);
-  }
-  await writeFile(join(runDir, "transcript.json"), JSON.stringify(transcript, null, 2));
-
-  console.error(`Replaying ${transcript.utterances.length} Utterances…`);
-  const screeningModel = openAiCompatibleModel(config.screening);
-  const verificationModel = openAiCompatibleModel(config.verification);
-  const events = await replay(transcript, {
-    screen: modelScreener(screeningModel),
-    verify: pipelineVerifier(verificationModel, firecrawlSearch(config.firecrawlUrl)),
-    checkCorrected: modelCorrectionCheck(screeningModel),
+  await runReplay(input, runDir, config, {
+    title: `BoxChecker replay: ${name}`,
     transcriptionDelay,
+    onStage: (_stage, detail) => console.error(detail),
     onEvent: (event) => {
       const line = describe(event);
       if (line) console.error(line);
     },
   });
 
-  await writeFile(join(runDir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
-  await writeFile(join(runDir, "report.md"), renderReport(events, { title: `BoxChecker replay: ${name}`, transcriptionDelay }));
   console.error(`Wrote ${runDir}/report.md`);
   if (values.key) await scoreRun(runDir, values.key, config);
 }
 
 async function scoreRun(runDir: string, keyFile: string, config: Config) {
-  const events: ReplayEvent[] = (await readFile(join(runDir, "events.jsonl"), "utf8"))
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  const events = await readEvents(runDir);
   const key = AnswerKey.parse(parseYaml(await readFile(keyFile, "utf8")));
   const result = await score(events, key, modelMatcher(openAiCompatibleModel(config.screening)));
   const markdown = renderScore(result);
@@ -125,8 +92,16 @@ async function scoreCommand(args: string[]) {
   await scoreRun(runDir, keyFile, loadConfig());
 }
 
+async function serveCommand(args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: { host: { type: "string", default: "0.0.0.0" }, port: { type: "string", default: "8790" } },
+  });
+  await serve({ host: values.host, port: Number(values.port), runsDir: "runs", config: loadConfig() });
+}
+
 const [command, ...rest] = process.argv.slice(2);
-const commands: Record<string, (args: string[]) => Promise<void>> = { transcribe, replay: replayCommand, score: scoreCommand };
+const commands: Record<string, (args: string[]) => Promise<void>> = { transcribe, replay: replayCommand, score: scoreCommand, serve: serveCommand };
 const handler = command ? commands[command] : undefined;
 if (!handler) {
   console.error(USAGE);

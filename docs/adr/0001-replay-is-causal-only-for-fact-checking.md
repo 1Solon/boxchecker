@@ -1,0 +1,3 @@
+# Replay is causal for fact-checking, not for transcription
+
+During a Replay, Screening and Verification only ever see the Transcript up to the current moment, and each Verdict is stamped with the time it would have appeared live. Transcription and speaker attribution, however, may process the whole recording up front. We are testing whether live fact-checking is useful, not whether live transcription is accurate — and on Discord, per-user audio streams make speaker attribution trivial, so non-causal diarization never has to be solved live. Reported latency therefore adds an assumed constant for transcription rather than a measured one.
